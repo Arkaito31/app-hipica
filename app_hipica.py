@@ -10,28 +10,28 @@ def conectar_db():
 def obtener_datos():
     conn = conectar_db()
     try:
-        # Cargamos los datos crudos para ver qué columnas existen
+        # Cargamos todos los datos disponibles
         df = pd.read_sql("SELECT * FROM resultados", conn)
         
-        # Diccionario para normalizar nombres de columnas
-        # Si el hipódromo puso 'Ejemplar', lo cambiamos a 'caballo'
-        columnas_clip = {
+        # Normalizamos nombres de columnas (de 'Ejemplar' a 'caballo')
+        renombrar = {
             'Ejemplar': 'caballo', 'Nombre': 'caballo', 'Caballo': 'caballo',
             'Orden': 'posicion', 'Llegada': 'posicion', 'Pos.': 'posicion'
         }
-        df = df.rename(columns=columnas_clip)
+        df = df.rename(columns=renombrar)
         
-        # Si después de renombrar tenemos lo necesario, calculamos
-        if 'caballo' in df.columns and 'posicion' in df.columns:
-            # Limpiamos la columna posicion por si tiene letras
+        if 'caballo' in df.columns:
+            # Limpieza de datos
             df['posicion'] = pd.to_numeric(df['posicion'], errors='coerce').fillna(10)
             
+            # Cálculo de rendimiento
             stats = df.groupby('caballo').agg(
-                promedio_pos=('posicion', 'mean'),
-                carreras_total=('posicion', 'count')
+                prom_pos=('posicion', 'mean'),
+                carreras=('posicion', 'count')
             ).reset_index()
             
-            stats['Score'] = (100 / (stats['promedio_pos'] + 0.5)).round(1)
+            # Puntaje: A menor posición, más puntos
+            stats['Score'] = (100 / (stats['prom_pos'] + 0.5)).round(1)
             return stats.sort_values(by='Score', ascending=False)
         return pd.DataFrame()
     except:
@@ -41,28 +41,26 @@ def obtener_datos():
 
 st.title("🏇 Predictor Hípico Chile")
 
-menu = st.sidebar.radio("Navegación", ["🏆 Top Ranking", "🔍 Buscador"])
+# Interfaz simplificada para móvil
+tab1, tab2 = st.tabs(["🏆 Ranking", "🔍 Buscador"])
 
-if menu == "🏆 Top Ranking":
+with tab1:
     res = obtener_datos()
     if not res.empty:
-        st.subheader("Favoritos por Historial")
-        for _, row in res.head(15).iterrows():
+        st.subheader("Mejores según historial")
+        for _, row in res.head(20).iterrows():
             with st.expander(f"⭐ {row['caballo']}"):
-                st.metric("Puntaje", f"{row['Score']} pts")
-                st.write(f"Carreras analizadas: {int(row['carreras_total'])}")
+                st.write(f"**Puntaje:** {row['Score']} pts")
+                st.write(f"**Carreras registradas:** {int(row['carreras'])}")
     else:
-        st.warning("Base de datos conectada, pero las columnas no coinciden. Ejecuta la aspiradora de nuevo para refrescar.")
+        st.info("Aún no hay datos suficientes. Sube tu archivo .db actualizado.")
 
-elif menu == "🔍 Buscador":
-    nombre = st.text_input("Nombre del caballo")
+with tab2:
+    nombre = st.text_input("Buscar caballo por nombre")
     if nombre:
         conn = conectar_db()
-        df = pd.read_sql(f"SELECT * FROM resultados WHERE Ejemplar LIKE '%{nombre}%' OR Caballo LIKE '%{nombre}%'", conn)
-        st.dataframe(df)
+        # Busca en cualquier columna de nombre posible
+        query = f"SELECT * FROM resultados WHERE Ejemplar LIKE '%{nombre}%' OR Caballo LIKE '%{nombre}%' LIMIT 10"
+        busqueda = pd.read_sql(query, conn)
+        st.dataframe(busqueda)
         conn.close()
-    
-    resumen = pd.read_sql("SELECT hipodromo, COUNT(*) as cantidad FROM resultados GROUP BY hipodromo", conn)
-    st.bar_chart(resumen.set_index('hipodromo'))
-
-    conn.close()
