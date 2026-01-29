@@ -2,94 +2,67 @@ import streamlit as st
 import pandas as pd
 import sqlite3
 
-# Configuración visual para móvil
-st.set_page_config(
-    page_title="Hípica Chile Predictor",
-    page_icon="🏇",
-    layout="centered"
-)
+st.set_page_config(page_title="Hípica Chile", page_icon="🏇")
 
-# Función para conectar con tu base de datos
 def conectar_db():
     return sqlite3.connect('hipica_chile.db')
 
-# Lógica del Algoritmo de Predicción
-def obtener_ranking():
+def obtener_datos():
     conn = conectar_db()
     try:
-        # Analizamos caballos con al menos 3 carreras para mayor precisión
-        query = """
-            SELECT caballo, 
-                   AVG(posicion) as promedio_pos, 
-                   COUNT(*) as carreras_total,
-                   hipodromo
-            FROM resultados 
-            GROUP BY caballo 
-            HAVING carreras_total >= 3
-        """
-        df = pd.read_sql(query, conn)
+        # Cargamos los datos crudos para ver qué columnas existen
+        df = pd.read_sql("SELECT * FROM resultados", conn)
         
-        # Algoritmo de Scoring (Base 100)
-        # A menor posición promedio, mayor puntaje
-        df['Score'] = (100 / (df['promedio_pos'] + 0.5)).round(1)
+        # Diccionario para normalizar nombres de columnas
+        # Si el hipódromo puso 'Ejemplar', lo cambiamos a 'caballo'
+        columnas_clip = {
+            'Ejemplar': 'caballo', 'Nombre': 'caballo', 'Caballo': 'caballo',
+            'Orden': 'posicion', 'Llegada': 'posicion', 'Pos.': 'posicion'
+        }
+        df = df.rename(columns=columnas_clip)
         
-        # Bonus por experiencia (más carreras = más confiable)
-        df['Score'] = df['Score'] + (df['carreras_total'] * 0.5)
-        
-        return df.sort_values(by='Score', ascending=False)
-    except Exception as e:
-        st.error(f"Error al leer la base de datos: {e}")
+        # Si después de renombrar tenemos lo necesario, calculamos
+        if 'caballo' in df.columns and 'posicion' in df.columns:
+            # Limpiamos la columna posicion por si tiene letras
+            df['posicion'] = pd.to_numeric(df['posicion'], errors='coerce').fillna(10)
+            
+            stats = df.groupby('caballo').agg(
+                promedio_pos=('posicion', 'mean'),
+                carreras_total=('posicion', 'count')
+            ).reset_index()
+            
+            stats['Score'] = (100 / (stats['promedio_pos'] + 0.5)).round(1)
+            return stats.sort_values(by='Score', ascending=False)
+        return pd.DataFrame()
+    except:
         return pd.DataFrame()
     finally:
         conn.close()
 
-# --- INTERFAZ DE LA APP ---
 st.title("🏇 Predictor Hípico Chile")
-st.markdown("---")
 
-# Menú inferior tipo App
-menu = st.sidebar.radio("Navegación", ["🏆 Top Ranking", "🔍 Buscador de Caballos", "📊 Mi Base de Datos"])
+menu = st.sidebar.radio("Navegación", ["🏆 Top Ranking", "🔍 Buscador"])
 
 if menu == "🏆 Top Ranking":
-    st.header("Mejores Rendimientos")
-    st.write("Caballos con mayor probabilidad según su historial:")
-    
-    ranking = obtener_ranking()
-    
-    if not ranking.empty:
-        for i, row in ranking.head(20).iterrows():
-            # Formato de tarjeta para móvil
+    res = obtener_datos()
+    if not res.empty:
+        st.subheader("Favoritos por Historial")
+        for _, row in res.head(15).iterrows():
             with st.expander(f"⭐ {row['caballo']}"):
-                col1, col2 = st.columns(2)
-                col1.metric("Puntaje", f"{row['Score']} pts")
-                col2.metric("Pos. Promedio", f"{row['promedio_pos']:.1f}")
-                st.write(f"📍 Hipódromo principal: {row['hipodromo']}")
-                st.write(f"📋 Carreras analizadas: {row['carreras_total']}")
+                st.metric("Puntaje", f"{row['Score']} pts")
+                st.write(f"Carreras analizadas: {int(row['carreras_total'])}")
     else:
-        st.info("No hay suficientes datos. Asegúrate de que 'hipica_chile.db' esté en la misma carpeta.")
+        st.warning("Base de datos conectada, pero las columnas no coinciden. Ejecuta la aspiradora de nuevo para refrescar.")
 
-elif menu == "🔍 Buscador de Caballos":
-    st.header("Buscador de Ejemplares")
-    nombre = st.text_input("Escribe el nombre del caballo:")
-    
+elif menu == "🔍 Buscador":
+    nombre = st.text_input("Nombre del caballo")
     if nombre:
         conn = conectar_db()
-        query = f"SELECT fecha, hipodromo, posicion, dividendo FROM resultados WHERE caballo LIKE '%{nombre}%' ORDER BY fecha DESC"
-        historial = pd.read_sql(query, conn)
+        df = pd.read_sql(f"SELECT * FROM resultados WHERE Ejemplar LIKE '%{nombre}%' OR Caballo LIKE '%{nombre}%'", conn)
+        st.dataframe(df)
         conn.close()
-        
-        if not historial.empty:
-            st.success(f"Historial para {nombre.upper()}")
-            st.dataframe(historial, use_container_width=True)
-        else:
-            st.warning("No se encontró historial para ese nombre.")
-
-elif menu == "📊 Mi Base de Datos":
-    st.header("Estado del Sistema")
-    conn = conectar_db()
-    total_registros = pd.read_sql("SELECT COUNT(*) as total FROM resultados", conn).iloc[0]['total']
-    st.metric("Total de Carreras Guardadas", total_registros)
     
     resumen = pd.read_sql("SELECT hipodromo, COUNT(*) as cantidad FROM resultados GROUP BY hipodromo", conn)
     st.bar_chart(resumen.set_index('hipodromo'))
+
     conn.close()
